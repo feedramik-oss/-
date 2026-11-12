@@ -1,12 +1,3 @@
-Да, оба пункта легко реализовать. 
-
-По поводу первого пункта — **я настоятельно рекомендую оставить подтверждение**, так как кнопка удаления находится прямо в таблице, и одно случайное нажатие может стереть клиента. Но раз вы просите, я уберу его (сделаю удаление моментальным). 
-
-По поводу второго — я добавлю красную кнопку **«Удалить всех»** в шапку раздела «Таблица (ИНН)». Для массового удаления подтверждение я всё же оставлю, чтобы вы случайно не стерли всю базу одним кликом.
-
-Вот полностью обновленный код. Замените им ваш файл:
-
-```html
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -1327,7 +1318,6 @@ async function addTableRow() {
     await loadData();
 }
 
-// НОВАЯ ФУНКЦИЯ: Массовое удаление всех из таблицы (ИНН)
 async function deleteAllTableClients() {
     const tableClients = clients.filter(c => c.boardType === 'table');
     if (tableClients.length === 0) return alert('Таблица уже пуста.');
@@ -1392,7 +1382,6 @@ async function moveToKanban(id) {
     }
 }
 
-// ИЗМЕНЕННАЯ ФУНКЦИЯ: Удаление БЕЗ подтверждения
 async function deleteClientById(id) {
     await deleteClientsFromDB([id]);
     await loadData();
@@ -1635,7 +1624,6 @@ async function saveClient() {
     await loadData(); bootstrap.Modal.getInstance(document.getElementById('clientModal')).hide();
 }
 
-// ИЗМЕНЕННАЯ ФУНКЦИЯ: Удаление БЕЗ подтверждения
 async function deleteClient() {
     const id = document.getElementById('clientId').value;
     if (!id) return;
@@ -1910,7 +1898,6 @@ function exportTableToExcel() {
     XLSX.writeFile(wb, `CRM_Таблица_ИНН_${new Date().toISOString().slice(0,10)}.xlsx`);
 }
 
-
 /* ====================================================================
    ЧАСТЬ 2 — ОТДЕЛ СОПРОВОЖДЕНИЯ И КАЛЕНДАРЬ
    ==================================================================== */
@@ -2061,4 +2048,399 @@ function renderSupportFunnelByMonth() {
         const label = k ? formatMonthLabel(k) : 'Без месяца';
         const d = byMonth[k];
         let html = `<div class="stat-card p-3" style="min-width:220px; border-left: 3px solid var(--n-border);">
-            <div class="text-muted small fw-bold mb-2">${label}</div
+            <div class="text-muted small fw-bold mb-2">${label}</div>`;
+        html += `<div class="d-flex justify-content-between align-items-center mb-1">
+            <span class="text-secondary small fw-semibold">Ожидается:</span>
+            <span class="fw-bold text-dark">${formatMoney(d.expected)}</span>
+        </div>`;
+        html += `<div class="border-top pt-2 mt-1">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-success small fw-semibold">Оплачено:</span>
+                <span class="fw-bold text-success">${formatMoney(d.paid)}</span>
+            </div>
+        </div></div>`;
+        return html;
+    }).join('');
+}
+
+function renderFunnel() {
+    const tbody = document.getElementById('funnelBody'); tbody.innerHTML = '';
+    const data = db[currentManager].funnel;
+    data.forEach((row, index) => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td style="color:var(--text-muted); text-align:center; font-size:12px;">${index + 1}</td>
+            <td><input type="text" value="${row.client || ''}" placeholder="Название клиента" onchange="updateFunnel(${row.id}, 'client', this.value)"></td>
+            <td>
+                <select class="status-select status-${row.statusIndex || 0}" onchange="updateFunnelStatus(${row.id}, this)">
+                    <option value="0" ${row.statusIndex == 0 ? 'selected' : ''}>— Оценка —</option>
+                    <option value="1" ${row.statusIndex == 1 ? 'selected' : ''}>Выставлен счет</option>
+                    <option value="2" ${row.statusIndex == 2 ? 'selected' : ''}>Оплачено и в работе</option>
+                    <option value="3" ${row.statusIndex == 3 ? 'selected' : ''}>Выписана реализация</option>
+                    <option value="4" ${row.statusIndex == 4 ? 'selected' : ''}>Подписана реализация</option>
+                </select>
+            </td>
+            <td><input type="number" value="${row.amount || ''}" placeholder="0" onchange="updateFunnel(${row.id}, 'amount', Number(this.value))"></td>
+            <td style="text-align:center;"><input type="checkbox" ${row.paid ? 'checked' : ''} onchange="updateFunnel(${row.id}, 'paid', this.checked)"></td>
+            <td><input type="date" value="${row.date || ''}" onchange="updateFunnel(${row.id}, 'date', this.value)"></td>
+            <td><input type="text" value="${row.service || ''}" placeholder="Что продали..." onchange="updateFunnel(${row.id}, 'service', this.value)"></td>
+            <td style="text-align:center;"><button class="delete-btn" onclick="deleteFunnelRow(${row.id})">✖</button></td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+async function addFunnelRow() {
+    const newRow = { id: Date.now(), client: '', statusIndex: 0, amount: null, paid: false, date: '', service: '' };
+    db[currentManager].funnel.push(newRow);
+    renderAllSupport();
+    await saveSupportData(currentManager);
+}
+async function deleteFunnelRow(id) {
+    db[currentManager].funnel = db[currentManager].funnel.filter(r => r.id !== id);
+    renderAllSupport();
+    await saveSupportData(currentManager);
+}
+async function updateFunnel(id, field, value) {
+    const row = db[currentManager].funnel.find(r => r.id === id);
+    if (row) { 
+        row[field] = value; 
+        calculateTotals(); 
+        populateSupportPlanMonths();
+        updateSupportSalesPlan();
+        renderSupportFunnelByMonth();
+        await saveSupportData(currentManager); 
+    }
+}
+async function updateFunnelStatus(id, selectElement) {
+    const row = db[currentManager].funnel.find(r => r.id === id);
+    if (row) {
+        row.statusIndex = selectElement.value; selectElement.className = `status-select status-${selectElement.value}`;
+        await saveSupportData(currentManager);
+    }
+}
+function calculateTotals() {
+    let expected = 0, actual = 0;
+    db[currentManager].funnel.forEach(row => {
+        const amt = Number(row.amount) || 0;
+        if (row.paid) actual += amt;
+        else expected += amt;
+    });
+    document.getElementById('totalExpected').innerText = formatMoney(expected);
+    document.getElementById('totalActual').innerText = "Оплачено: " + formatMoney(actual);
+}
+function formatMoney(amount) { return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(amount); }
+
+function renderReports() {
+    const tbody = document.getElementById('reportBody'); tbody.innerHTML = '';
+    const data = db[currentManager].reports;
+    data.sort((a, b) => new Date(b.date) - new Date(a.date));
+    data.forEach(row => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td><input type="date" value="${row.date || ''}" onchange="updateReport(${row.id}, 'date', this.value)"></td>
+            <td><input type="number" value="${row.calls !== undefined ? row.calls : ''}" placeholder="0" onchange="updateReport(${row.id}, 'calls', Number(this.value))"></td>
+            <td><input type="number" value="${row.kp !== undefined ? row.kp : ''}" placeholder="0" onchange="updateReport(${row.id}, 'kp', Number(this.value))"></td>
+            <td><input type="number" value="${row.meetings !== undefined ? row.meetings : ''}" placeholder="0" onchange="updateReport(${row.id}, 'meetings', Number(this.value))"></td>
+            <td><input type="number" value="${row.invoicesCount !== undefined ? row.invoicesCount : ''}" placeholder="0" onchange="updateReport(${row.id}, 'invoicesCount', Number(this.value))"></td>
+            <td><input type="number" value="${row.invoicesAmount !== undefined ? row.invoicesAmount : ''}" placeholder="0" onchange="updateReport(${row.id}, 'invoicesAmount', Number(this.value))"></td>
+            <td><input type="text" value="${row.airTime || ''}" placeholder="Напр: 1 ч 52 мин" onchange="updateReport(${row.id}, 'airTime', this.value)"></td>
+            <td style="text-align:center;"><button class="delete-btn" onclick="deleteReportRow(${row.id})">✖</button></td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+async function addReportRow() {
+    const today = new Date().toISOString().split('T')[0];
+    const newRow = { id: Date.now(), date: today, calls: null, kp: null, meetings: null, invoicesCount: null, invoicesAmount: null, airTime: '' };
+    db[currentManager].reports.push(newRow);
+    renderReports();
+    await saveSupportData(currentManager);
+}
+async function deleteReportRow(id) {
+    db[currentManager].reports = db[currentManager].reports.filter(r => r.id !== id);
+    renderReports();
+    await saveSupportData(currentManager);
+}
+async function updateReport(id, field, value) {
+    const row = db[currentManager].reports.find(r => r.id === id);
+    if (row) {
+        row[field] = value; if (field === 'date') renderReports();
+        await saveSupportData(currentManager);
+    }
+}
+
+function formatExcelDate(dateVal) {
+    if (!dateVal) return '';
+    if (dateVal instanceof Date) return dateVal.toISOString().split('T')[0];
+    const str = String(dateVal).trim(); const match = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+    if (match) return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+    return str;
+}
+
+async function importSupportData(event) {
+    const file = event.target.files[0]; if (!file) return;
+    let targetManager = currentManager;
+    const fileNameLower = file.name.toLowerCase();
+    if (fileNameLower.includes('светлана') || fileNameLower.includes('света')) targetManager = 'svetlana';
+    else if (fileNameLower.includes('диана')) targetManager = 'diana';
+    else if (fileNameLower.includes('анна')) targetManager = 'anna';
+
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const workbook = XLSX.read(data, { type: 'array' });
+            const reverseStatusMap = { 'Оценка': 0, '— Оценка —': 0, 'Выставлен счет': 1, 'Оплачено и в работе': 2, 'Выписана реализация': 3, 'Подписана реализация': 4 };
+            let importedFunnels = 0; let importedReports = 0;
+
+            workbook.SheetNames.forEach(sheetName => {
+                const sheet = workbook.Sheets[sheetName]; const json = XLSX.utils.sheet_to_json(sheet); const sheetNameLower = sheetName.toLowerCase();
+                if (sheetNameLower.includes('воронка')) {
+                    const validRows = json.filter(row => row['Клиент'] && !String(row['Клиент']).toLowerCase().includes('итого'));
+                    db[targetManager].funnel = validRows.map(row => {
+                        let amountKey = Object.keys(row).find(k => k.includes('Ожидаемая сумма') || k === 'Сумма');
+                        let statusKey = Object.keys(row).find(k => k.includes('Статус'));
+                        let paidKey = Object.keys(row).find(k => k.includes('Оплачено'));
+                        let dateKey = Object.keys(row).find(k => k.includes('Дата'));
+                        let serviceKey = Object.keys(row).find(k => k.includes('Услуга'));
+                        return {
+                            id: Date.now() + Math.random(), client: row['Клиент'] || '', statusIndex: reverseStatusMap[row[statusKey]] || 0,
+                            amount: row[amountKey] || null, paid: row[paidKey] === 'Да' || row[paidKey] === true,
+                            date: row[dateKey] ? formatExcelDate(row[dateKey]) : '', service: row[serviceKey] || ''
+                        };
+                    });
+                    importedFunnels += db[targetManager].funnel.length;
+                } else if (sheetNameLower.includes('отчет')) {
+                    const validRows = json.filter(row => row['Дата'] && !String(row['Дата']).toLowerCase().includes('итого'));
+                    db[targetManager].reports = validRows.map(row => {
+                        let amountKey = Object.keys(row).find(k => k.includes('Счета (сумма)') || k.includes('Сумма'));
+                        return {
+                            id: Date.now() + Math.random(), date: formatExcelDate(row['Дата']), calls: row['Звонки'] || null,
+                            kp: row['Отпр. КП'] || null, meetings: row['Встречи'] || null, invoicesCount: row['Счета (шт)'] || null,
+                            invoicesAmount: row[amountKey] || null, airTime: row['Эфир'] || ''
+                        };
+                    });
+                    importedReports += db[targetManager].reports.length;
+                }
+            });
+
+            await saveSupportData(targetManager);
+            if (targetManager !== currentManager) {
+                switchManager(targetManager);
+            } else {
+                renderAllSupport();
+            }
+            alert(`✅ Успешно импортировано в профиль "${targetManager}":\n- Записей воронки: ${importedFunnels}\n- Ежедневных отчетов: ${importedReports}`);
+        } catch (err) {
+            console.error(err); alert('❌ Ошибка при чтении файла: ' + err.message);
+        }
+        event.target.value = '';
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+/* ====================================================================
+   КАЛЕНДАРЬ СТАТУСОВ
+   ==================================================================== */
+function formatDateForInput(d) {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function renderWelcomeStatuses() {
+    const container = document.getElementById('teamStatusCalendar');
+    if (!container) return;
+    
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    
+    const startDate = new Date(currentYear, 10, 1); // 10 - это ноябрь
+    const endDate = new Date(currentYear, 11, 31); // 11 - это декабрь
+    
+    let thead = '<tr><th>Дата</th>';
+    Object.values(managerNames).forEach(name => {
+        thead += `<th>${name}</th>`;
+    });
+    thead += '</tr>';
+    
+    let tbody = '';
+    let currentDate = new Date(startDate);
+    
+    while (currentDate <= endDate) {
+        const dateStr = formatDateForInput(currentDate);
+        const dayOfWeek = currentDate.getDay(); // 0 - Вс, 6 - Сб
+        const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+        
+        const dayName = DAY_NAMES[dayOfWeek];
+        const displayDate = `${String(currentDate.getDate()).padStart(2, '0')}.${String(currentDate.getMonth() + 1).padStart(2, '0')} (${dayName})`;
+        
+        const isToday = formatDateForInput(today) === dateStr;
+        const rowStyle = isToday ? 'style="background-color: #f0f7ff;"' : '';
+        
+        tbody += `<tr class="${isWeekend ? 'weekend-row' : ''}" ${rowStyle}>`;
+        tbody += `<td class="date-col">${displayDate}</td>`;
+        
+        Object.keys(managerNames).forEach(managerKey => {
+            const managerStatus = db[managerKey].status || {};
+            let statusObj = managerStatus[dateStr];
+            
+            if (!statusObj) {
+                if (!isWeekend) {
+                    statusObj = { type: 'office' };
+                } else {
+                    statusObj = { type: 'none' };
+                }
+            }
+            
+            const currentType = statusObj.type || 'none';
+            
+            const statusOptions = [
+                { value: 'office', label: '🟢 В офисе' },
+                { value: 'vacation', label: '🏖 Отпуск' },
+                { value: 'sick', label: '🤒 Больничный' },
+                { value: 'unpaid', label: '🟡 За свой счет' },
+                { value: 'remote', label: '🏠 На удаленке' },
+                { value: 'holiday', label: '🎉 Гос выходной' },
+                { value: 'none', label: '—' }
+            ];
+            
+            let selectHtml = `<select class="inline-status-select status-select-${currentType}" onchange="updateStatusInline('${managerKey}', '${dateStr}', this)">`;
+            statusOptions.forEach(opt => {
+                selectHtml += `<option value="${opt.value}" ${currentType === opt.value ? 'selected' : ''}>${opt.label}</option>`;
+            });
+            selectHtml += `</select>`;
+            
+            let commentIcon = '';
+            if (statusObj.comment) {
+                commentIcon = `<i class="bi bi-chat-left-text comment-icon" title="${escapeHtml(statusObj.comment)}" onclick="openStatusCommentModal('${managerKey}', '${dateStr}')"></i>`;
+            } else {
+                commentIcon = `<i class="bi bi-pencil-square comment-icon" style="opacity: 0.3;" onclick="openStatusCommentModal('${managerKey}', '${dateStr}')"></i>`;
+            }
+            
+            tbody += `<td style="position: relative;">${selectHtml}${commentIcon}</td>`;
+        });
+        tbody += `</tr>`;
+        
+        currentDate.setDate(currentDate.getDate() + 1);
+    }
+    
+    container.innerHTML = `<thead>${thead}</thead><tbody>${tbody}</tbody>`;
+}
+
+async function updateStatusInline(managerKey, dateStr, selectEl) {
+    const type = selectEl.value;
+    if (!db[managerKey].status) db[managerKey].status = {};
+    
+    if (type === 'none') {
+        db[managerKey].status[dateStr] = { type: 'none', comment: '' };
+    } else {
+        const oldComment = db[managerKey].status[dateStr] ? db[managerKey].status[dateStr].comment : '';
+        db[managerKey].status[dateStr] = { type, comment: oldComment };
+    }
+    
+    selectEl.className = `inline-status-select status-select-${type}`;
+    
+    await saveSupportData(managerKey);
+}
+
+function openStatusCommentModal(managerKey, dateStr) {
+    document.getElementById('statusManagerKey').value = managerKey;
+    document.getElementById('statusDate').value = dateStr;
+    
+    const dateObj = new Date(dateStr);
+    const dayName = DAY_NAMES[dateObj.getDay()];
+    const displayDate = `${String(dateObj.getDate()).padStart(2, '0')}.${String(dateObj.getMonth() + 1).padStart(2, '0')}.${dateObj.getFullYear()} (${dayName})`;
+    
+    document.getElementById('statusManagerName').value = managerNames[managerKey];
+    document.getElementById('statusDateDisplay').value = displayDate;
+    
+    const statusObj = db[managerKey].status[dateStr] || { type: 'none' };
+    const currentType = statusObj.type || 'none';
+    
+    let typeLabel = '—';
+    if (currentType === 'office') typeLabel = '🟢 В офисе';
+    else if (currentType === 'vacation') typeLabel = '🏖 Отпуск';
+    else if (currentType === 'sick') typeLabel = '🤒 Больничный';
+    else if (currentType === 'unpaid') typeLabel = '🟡 За свой счет';
+    else if (currentType === 'remote') typeLabel = '🏠 На удаленке';
+    else if (currentType === 'holiday') typeLabel = '🎉 Гос выходной';
+    
+    document.getElementById('statusTypeDisplay').value = typeLabel;
+    document.getElementById('statusComment').value = statusObj.comment || '';
+    
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('statusModal')).show();
+}
+
+async function saveStatusComment() {
+    const managerKey = document.getElementById('statusManagerKey').value;
+    const dateStr = document.getElementById('statusDate').value;
+    const comment = document.getElementById('statusComment').value.trim();
+    
+    if (!db[managerKey].status) db[managerKey].status = {};
+    
+    if (!db[managerKey].status[dateStr]) {
+        const dateObj = new Date(dateStr);
+        const dayOfWeek = dateObj.getDay();
+        const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+        const type = isWeekend ? 'none' : 'office';
+        db[managerKey].status[dateStr] = { type, comment };
+    } else {
+        db[managerKey].status[dateStr].comment = comment;
+    }
+    
+    await saveSupportData(managerKey);
+    renderWelcomeStatuses();
+    bootstrap.Modal.getInstance(document.getElementById('statusModal')).hide();
+}
+
+// Автообновление календаря при смене дня
+let currentDay = new Date().getDate();
+setInterval(() => {
+    const now = new Date();
+    if (now.getDate() !== currentDay) {
+        currentDay = now.getDate();
+        renderWelcomeStatuses();
+    }
+}, 60000); // Проверка каждую минуту
+
+/* ====================================================================
+   НАВИГАЦИЯ (ВХОД И ВЫХОД)
+   ==================================================================== */
+function enterSystem(managerKey) {
+    document.getElementById('welcomeScreen').style.display = 'none';
+    document.querySelector('.sidebar').style.display = 'flex';
+    document.getElementById('mainContent').style.display = 'block';
+    switchManager(managerKey);
+}
+
+function goHome() {
+    document.querySelector('.sidebar').style.display = 'none';
+    document.getElementById('mainContent').style.display = 'none';
+    document.getElementById('welcomeScreen').style.display = 'flex';
+    document.querySelectorAll('.manager-btn').forEach(el => el.classList.remove('active'));
+}
+
+/* ИНИЦИАЛИЗАЦИЯ */
+document.getElementById('directionOptions').innerHTML = DIRECTIONS.map(d => `<option value="${escapeHtml(d)}"></option>`).join('');
+(async () => {
+    await loadData();
+    await loadSupportData();
+    showPage('mainMenu');
+})();
+
+// Экспорт функций
+Object.assign(window, {
+    showPage, openClientModal, moveClientToStage, openImportModal, exportToExcel, importFromExcel, importRevenueFromExcel,
+    addEventFromModal, deleteEventFromModal, addCommentFromModal, deleteCommentFromModal,
+    saveClient, deleteClient, confirmDropMove, cancelDropMove, renderBoard, 
+    deleteAllInStage, updateSalesPlan, switchManager, addFunnelRow, deleteFunnelRow, updateFunnel, updateFunnelStatus,
+    addReportRow, deleteReportRow, updateReport, importSupportData, updateSupportSalesPlan,
+    enterSystem, goHome, updateRevenueClient, moveToKanban, deleteClientById,
+    updateStatusInline, openStatusCommentModal, saveStatusComment, addTableRow, updateTableClient,
+    importTableFromExcel, exportTableToExcel, deleteAllTableClients
+});
+</script>
+</body>
+</html>
